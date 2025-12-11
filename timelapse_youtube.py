@@ -1,145 +1,224 @@
 #!/usr/bin/env python3
 import os
-import sys
 import time
-import glob
-import yaml
-import shutil
+import datetime
 import requests
 import subprocess
-from datetime import datetime
 from pathlib import Path
 
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-import google.auth
 
+
+# =========================================================
+# CONFIGURATION PARAMETERS
+# =========================================================
+
+SNAPSHOT_URL = "http://camera/snapshot.jpg"
+INTERVAL_SECONDS = 10
+TOTAL_SNAPSHOTS = 8640
+WORKDIR = "/opt/timelapse"
+VIDEO_TITLE = "Sky Timelapse"
+CHUNK_SIZE = 2000                        # Number of frames per encoding chunk
+
+# YouTube API parameters
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+CLIENT_SECRET_FILE = "/opt/timelapse/client_secret.json"  # Download from Google Cloud
+TOKEN_FILE = "/opt/timelapse/youtube_token.json"
 
-def load_config():
-    with open("config.yaml") as f:
-        return yaml.safe_load(f)
 
-def acquire_lock(lockfile):
-    if os.path.exists(lockfile):
-        print("Lock exists, exiting.")
-        sys.exit(0)
-    with open(lockfile, "w") as f:
-        f.write(str(os.getpid()))
+# =========================================================
+# AUTHENTICATE YOUTUBE
+# =========================================================
 
-def release_lock(lockfile):
-    if os.path.exists(lockfile):
-        os.remove(lockfile)
-
-def fetch_snapshot(url, path, timeout, retries):
-    for _ in range(retries):
-        try:
-            r = requests.get(url, timeout=timeout)
-            if r.ok:
-                with open(path, "wb") as f:
-                    f.write(r.content)
-                return True
-        except Exception:
-            pass
-        time.sleep(2)
-    return False
-
-def create_timelapse_mp4(workdir, prefix, fps, resolution):
-    mp4_path = os.path.join(workdir, "timelapse.mp4")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-framerate", str(fps),
-        "-pattern_type", "glob",
-        "-i", f"{prefix}_*.jpg",
-        "-s", resolution,
-        "-pix_fmt", "yuv420p",
-        mp4_path
-    ]
-    subprocess.check_call(cmd, cwd=workdir)
-    return mp4_path
-
-def get_youtube_service(creds_file, token_file):
+def youtube_authenticate():
     creds = None
-    if os.path.exists(token_file):
-        creds = google.auth.load_credentials_from_file(token_file, SCOPES)[0]
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            creds.refresh(Request)
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(creds_file, SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(
+                CLIENT_SECRET_FILE, SCOPES
+            )
             creds = flow.run_console()
-        with open(token_file, "w") as f:
-            f.write(creds.to_json())
+
+        with open(TOKEN_FILE, "w") as token:
+            token.write(creds.to_json())
+
     return build("youtube", "v3", credentials=creds)
 
-def upload_to_youtube(youtube, mp4_path, title, description, privacy):
-    req = youtube.videos().insert(
-        part="snippet,status",
-        body={
-            "snippet": {"title": title, "description": description},
-            "status": {"privacyStatus": privacy}
+
+# =========================================================
+# SNAPSHOT CAPTURE
+# =========================================================
+
+def capture_snapshots():
+    snapshot_dir = Path(WORKDIR) / "frames"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Starting snapshot capture...")
+    for i in range(TOTAL_SNAPSHOTS):
+        outfile = snapshot_dir / f"frame_{i:08d}.jpg"
+        try:
+            r = requests.get(SNAPSHOT_URL, timeout=10)
+            if r.status_code == 200:
+                with open(outfile, "wb") as f:
+                    f.write(r.content)
+            else:
+                print(f"Failed to get snapshot {i}, HTTP {r.status_code}")
+        except Exception as e:
+            print(f"Snapshot error {i}: {e}")
+
+        time.sleep(INTERVAL_SECONDS)
+
+    print("Snapshot capture complete.")
+
+
+# =========================================================
+# INCREMENTAL CHUNK ENCODING
+# =========================================================
+
+def encode_video():
+    snapshot_dir = Path(WORKDIR) / "frames"
+    chunks_dir = Path(WORKDIR) / "chunks"
+    chunks_dir.mkdir(exist_ok=True)
+
+    frames = sorted(snapshot_dir.glob("frame_*.jpg"))
+    total = len(frames)
+    chunk_index = 0
+
+    print("Encoding chunks...")
+
+    for i in range(0, total, CHUNK_SIZE):
+        chunk_frames = frames[i:i+CHUNK_SIZE]
+        listfile = chunks_dir / f"chunk_{chunk_index:04d}.txt"
+
+        with open(listfile, "w") as f:
+            for frame in chunk_frames:
+                f.write(f"file '{frame.absolute()}'\n")
+
+        chunk_out = chunks_dir / f"chunk_{chunk_index:04d}.mp4"
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", str(listfile),
+            "-r", "30",
+            "-vf", "scale=3840:2160:force_original_aspect_ratio=decrease",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            str(chunk_out)
+        ]
+
+        print("Encoding", chunk_out)
+        subprocess.run(cmd, check=True)
+        chunk_index += 1
+
+    # Merge final
+    merge_list = Path(WORKDIR) / "chunks" / "merge.txt"
+    with open(merge_list, "w") as f:
+        for i in range(chunk_index):
+            f.write(f"file 'chunk_{i:04d}.mp4'\n")
+
+    final_mp4 = Path(WORKDIR) / "timelapse_final.mp4"
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", str(merge_list),
+        "-c", "copy",
+        str(final_mp4)
+    ]
+
+    print("Merging chunks...")
+    subprocess.run(cmd, check=True)
+
+    return final_mp4
+
+
+# =========================================================
+# YOUTUBE UPLOAD
+# =========================================================
+
+def upload_to_youtube(filepath: Path):
+    youtube = youtube_authenticate()
+
+    today = datetime.date.today().isoformat()
+    full_title = f"{VIDEO_TITLE} - {today}"
+
+    body = {
+        "snippet": {
+            "title": full_title,
+            "description": "Automatically generated timelapse",
+            "tags": ["timelapse", "sky"],
+            "categoryId": "22"
         },
-        media_body=MediaFileUpload(mp4_path, chunksize=-1, resumable=True)
+        "status": {"privacyStatus": "public"}
+    }
+
+    media = MediaFileUpload(str(filepath), chunksize=1024*1024*8, resumable=True)
+
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body=body,
+        media_body=media
     )
-    req.execute()
+
+    print("Uploading to YouTube...")
+
+    response = None
+    while response is None:
+        status, response = request.next_chunk()
+        if status:
+            print(f"Upload: {int(status.progress() * 100)}%")
+
+    print("Upload complete.")
+    return True
+
+
+# =========================================================
+# MAIN WORKFLOW
+# =========================================================
 
 def main():
-    cfg = load_config()
-    acquire_lock(cfg["system"]["lock_file"])
+    work = Path(WORKDIR)
+    work.mkdir(parents=True, exist_ok=True)
 
+    final_mp4 = work / "timelapse_final.mp4"
+
+    # If previous run failed leaving MP4, attempt upload
+    if final_mp4.exists():
+        print("Found existing MP4. Attempting re-upload.")
+        try:
+            if upload_to_youtube(final_mp4):
+                final_mp4.unlink()
+        except Exception as e:
+            print("Upload failed again:", e)
+        return
+
+    # 1. Capture frames
+    capture_snapshots()
+
+    # 2. Encode incremental chunks
+    final_mp4 = encode_video()
+
+    # 3. Clean frames
+    snapshot_dir = Path(WORKDIR) / "frames"
+    for f in snapshot_dir.glob("*"):
+        f.unlink()
+    snapshot_dir.rmdir()
+
+    # 4. Try uploading
     try:
-        wd = Path(cfg["working_dir"])
-        wd.mkdir(parents=True, exist_ok=True)
+        if upload_to_youtube(final_mp4):
+            final_mp4.unlink()
+    except Exception as e:
+        print("Upload failed — leaving MP4 for retry:", e)
 
-        # Retry upload first
-        mp4 = wd / "timelapse.mp4"
-        if mp4.exists():
-            yt = get_youtube_service(
-                cfg["youtube"]["credentials_file"],
-                cfg["youtube"]["token_file"]
-            )
-            title = f"{cfg['youtube']['title_base']} {datetime.now():%Y-%m-%d}"
-            upload_to_youtube(
-                yt, str(mp4), title,
-                cfg["youtube"]["description"],
-                cfg["youtube"]["privacy_status"]
-            )
-            mp4.unlink()
-            return
-
-        snaps = list(wd.glob(f"{cfg['snapshot_prefix']}_*.jpg"))
-        snap_id = len(snaps) + 1
-
-        snap_name = f"{cfg['snapshot_prefix']}_{snap_id:06d}.jpg"
-        snap_path = wd / snap_name
-
-        if fetch_snapshot(
-            cfg["snapshot_url"],
-            snap_path,
-            cfg["network"]["snapshot_timeout"],
-            cfg["network"]["snapshot_retries"]
-        ):
-            print(f"Saved {snap_name}")
-        else:
-            print("Snapshot failed")
-
-        snaps = list(wd.glob(f"{cfg['snapshot_prefix']}_*.jpg"))
-        if len(snaps) >= cfg["snapshots_per_video"]:
-            mp4_path = create_timelapse_mp4(
-                str(wd),
-                cfg["snapshot_prefix"],
-                cfg["video_fps"],
-                cfg["video_resolution"]
-            )
-            for s in snaps:
-                s.unlink()
-            print("Timelapse created")
-
-    finally:
-        release_lock(cfg["system"]["lock_file"])
 
 if __name__ == "__main__":
     main()
