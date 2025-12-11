@@ -15,19 +15,16 @@ This project captures still images throughout the day, assembles them into a tim
 
 ## 📁 Project Structure (recommended)
 
-project/
-├─ client_secret.json
-├─ token.json
-├─ images/
-│ └─ (your JPEG images collected throughout the day)
-├─ output/
-│ └─ final.mp4
-├─ timelapse.py
-├─ youtube_oauth_oob.py
+project/\
+├─ client_secret.json\
+├─ token.json\
+├─ images/\
+│ └─ (your JPEG images collected throughout the day)\
+├─ output/\
+│ └─ final.mp4\
+├─ timelapse.py\
+├─ youtube_oauth_oob.py\
 └─ README.md
-
-yaml
-コードをコピーする
 
 ---
 
@@ -40,9 +37,6 @@ Google Cloud → APIs & Services → Credentials → **Create OAuth Client → D
 Click **Download JSON** and save it as:
 
 client_secret.json
-
-yaml
-コードをコピーする
 
 OOB no longer requires redirect URIs — Google auto-assigns `urn:ietf:wg:oauth:2.0:oob`.
 
@@ -59,18 +53,12 @@ Run:
 
 python3 youtube_oauth_oob.py
 
-lua
-コードをコピーする
-
 This will output something like:
 
 Please visit this URL:
 https://accounts.google.com/o/oauth2/auth?....
 
 Enter the code Google gives you:
-
-yaml
-コードをコピーする
 
 Paste the code → press Enter → `token.json` is generated automatically.
 
@@ -83,17 +71,11 @@ Your external script or camera system dumps `.jpg` images into:
 
 images/
 
-makefile
-コードをコピーする
-
 ### 2. Run timelapse + upload script  
 
 Example:
 
 python3 timelapse.py
-
-yaml
-コードをコピーする
 
 The script:
 
@@ -108,9 +90,9 @@ The script:
 ## 🕒 Avoiding Overlap (Important)
 To ensure uploads never overlap with the next day:
 
-✔ Use a **23-hour capture window**  
-✔ Start the script at the same time daily  
-✔ No need for waits or cron padding  
+✔ Use a **23-hour capture window**  \
+✔ Start the script at the same time daily  \
+✔ No need for waits or cron padding  \
 ✔ Dark hours have no meaningful visual data anyway
 
 We verified this is the simplest stable solution.
@@ -119,19 +101,13 @@ We verified this is the simplest stable solution.
 
 ## 🛠 Requirements
 
-pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
-pip install opencv-python
+pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client\
+pip install opencv-python\
 pip install requests
-
-yaml
-コードをコピーする
 
 FFmpeg must be installed:
 
 sudo apt install ffmpeg
-
-yaml
-コードをコピーする
 
 ---
 
@@ -139,15 +115,12 @@ yaml
 
 Inside the script, you can adjust:
 
-CHUNK_SIZE = 200 # images per chunk
-FPS = 30 # video framerate
-IMAGE_DIR = "images"
-OUTPUT = "output/final.mp4"
-TITLE = "Daily Timelapse"
-DESCRIPTION = "Automatically generated timelapse."
-
-yaml
-コードをコピーする
+- CHUNK_SIZE = 200 # images per chunk
+- FPS = 30 # video framerate
+- IMAGE_DIR = "images"
+- OUTPUT = "output/final.mp4"
+- TITLE = "Daily Timelapse"
+- DESCRIPTION = "Automatically generated timelapse."
 
 ---
 
@@ -166,9 +139,6 @@ You can run:
 
 python3 youtube_oauth_oob.py --test
 
-yaml
-コードをコピーする
-
 This checks that:
 - client_secret.json is valid  
 - token.json can refresh  
@@ -182,9 +152,6 @@ If anything breaks:
 
 rm token.json
 python3 youtube_oauth_oob.py
-
-yaml
-コードをコピーする
 
 Re-authenticate via OOB code again.
 
