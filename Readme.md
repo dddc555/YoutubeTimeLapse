@@ -1,14 +1,13 @@
-✅ Install Dependencies (once)
-sudo apt update
-sudo apt install -y ffmpeg python3-pip
+✅ Install Dependencies (once) \
+sudo apt update \
+sudo apt install -y ffmpeg python3-pip \
 pip3 install --user google-api-python-client google-auth google-auth-oauthlib requests
 
-✅ Google YouTube API Setup (once)
-
-Create Google Cloud Project
-Enable YouTube Data API v3
-Create OAuth Client ID (Desktop app)
-Download client_secret.json
+✅ Google YouTube API Setup (once) \
+Create Google Cloud Project \
+Enable YouTube Data API v3 \
+Create OAuth Client ID (Desktop app) \
+Download client_secret.json \
 First run will open a browser to authorize; afterward it auto-refreshes.
 
 ✅ Make executable:
